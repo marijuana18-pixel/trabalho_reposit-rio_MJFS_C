@@ -1,0 +1,292 @@
+---
+title: "Trabalho Prático 1 - Extração de Conhecimento de Dados Biológicos"
+author: "Carina Filipa Carvalho Ferreira e Maria Joana Ferreira da Silva"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+A primeira fase deverá ser terminada até ao dia 2 de abril e deverá incluir:
+1. explicação dos dados, sua origem e relevância
+2. tarefas de preparação e de pré-processamento dos dados
+3. sumarização dos dados (estatística descritiva, exploração com recurso a
+gráficos)
+4. análise estatística univariada; análise de expressão diferencial e de
+enriquecimento
+
+Escolha do dataset:
+
+TCGA-BRCA (cancro da mama)
+
+A seleção foi efetuada através da plataforma https://portal.gdc.cancer.gov/analysis_page?app=Projects.
+Inicialmente, foi escolhida a base de dados The Cancer Genome Atlas, devido à sua abrangência e qualidade, disponibilizando dados moleculares de diversos tipos de cancro humano. Foi selecionado o TCGA-BRCA, correspondente ao carcinoma invasivo da mama, que é um dos tipos de cancro mais estudados e com elevada relevância clínica.
+De seguida, procedeu-se à definição do tipo de dados a utilizar. Foi selecionada a categoria de dados Transcriptome Profiling, com o objetivo de obter informação ao nível da expressão genética. Dentro desta categoria, optou-se especificamente por dados do tipo Gene Expression Quantification, garantindo que os valores correspondem à quantificação da expressão de genes.
+
+
+2. Tarefas de preparação e de pré-processamento dos dados
+
+Usamos o gdc-rnaseq-tool em https://github.com/cpreid2/gdc-rnaseq-tool para fazer donwload dos ficheiros RNA-Seq/miRNA-Seq do portal GDC e tranformar em matrices idenitficatas por TCGA barcode usando o GDC manifest file
+
+Esta ferramenta gdc-rnaseq-tool faz o seguinte: 
+    Downloads RNA-Seq / miRNA-Seq data files using a GDC manifest file
+    Unzips the files into separate folders identified by experimental strategy and bioinformatics workflow
+    Merges the files into separate matrix files identified in the table below
+
+Fizemos download to scrip gdc-rnaseq-tool.py do link https://github.com/cpreid2/gdc-rnaseq-tool/releases/download/1.0/gdc-rnaseq-tool.py
+
+Fizemos download do ficheiro manifesto do portal contendo os ficheiros RNA/miRNA expression files (de https://portal.gdc.cancer.gov/
+
+Guardamos ambos os ficheiros e corremos o seguinte comando:
+
+    python3 gdc-rnaseq-tool.py <manifest_file> --hugo
+    
+Esta ferramenta permite obter um output "raw_count_matrix.tsv" que necessita de ser convertido para csv.
+
+Para isso pode-se usar o código em python:
+
+import pandas as pd
+
+df = pd.read_csv("results/raw_count_matrix.tsv", sep="\t")
+df.to_csv("expression_matrix.csv", index=False)
+
+```{r}
+library(readr)
+
+#importar em TSV o Merged_miRNA_Counts
+
+df <- Merged_miRNA_Counts
+
+write.csv(df, "expression_matrix.csv", row.names = FALSE)
+
+#importar "expression_matrix.csv"
+
+```
+Este ficheiro é uma tabela de contagens de expressão miRNA em multiplas amostras onde cada coluna 
+representa uma leitura de miRNA, cada coluna representa uma amostra e os valores são os níveis de expressão (contagens em bruto)
+
+é necessário proceder a uma transposição da matrix, para que as amostras fiquem nas linhas e o nome das moleculas miRNA em cada coluna
+
+```{r}
+
+# Set first column (e.g., gene/miRNA IDs) as row names
+rownames(df) <- df[,1]
+df <- df[,-1]
+
+# Transpose
+df_t <- t(df)
+
+# Convert back to data frame
+df_t <- as.data.frame(df_t)
+
+# Add sample names as a column
+df_t$Sample <- rownames(df_t)
+df_t <- df_t[, c(ncol(df_t), 1:(ncol(df_t)-1))]
+
+# Save
+head(df_t)
+
+write.csv(df_t, "transposed_matrix.csv", row.names=FALSE) #isto não funciona
+
+#importar transposed_matrix.csv
+
+```
+
+
+3. sumarização dos dados (estatística descritiva, exploração com recurso a
+gráficos)
+
+Podemos usar o Bioconductor: conjunto de packages do R para análise e compreensão
+de dados genómicos.
+
+Inúmeros packages para análise de expressão genética
+www.bioconductor.org
+
+```{r setup, include=FALSE}
+
+if (!requireNamespace("BiocManager", quietly = TRUE) )
+install.packages("BiocManager")
+BiocManager::install(version = "3.18")
+BiocManager::install(c("genefilter", "limma"))
+BiocManager::install(c("ALL"))
+BiocManager::install(c("GEOquery"))
+
+```
+2. tarefas de preparação e de pré-processamento dos dados
+
+NOTA: falta-nos completar o ponto 3 e 4 do exercicio, mas adicionamos em baixo o código que pretendemos usar.
+
+```{r}
+# Para saber a estrutura do Expression set
+
+dim(df_t) #saber a dimensão
+
+#funciona até aqui!
+
+exp = exprs(df) #exp – matriz de dados de expressão
+dim(exp) 
+class(exp)
+exp[1,1:5] #Nomes das amostras
+sampleNames(ALL)[1:5]
+featureNames(ALL)[1:5] #Nomes das features
+varMetadata(ALL) #Atributos dos metadados das amostras
+ALL$sex #Valores da variável “sex” dos metadados para cada amostra
+
+annotation(ALL) #Biblioteca de anotação – serve para saber que genes estão associados acada probe
+
+experimentData(ALL)
+abstract(ALL) #Informação sobre a experiência
+
+subALL = ALL [2:4,4:7]
+subALL
+
+females = ALL [, ALL$sex == "F"]
+females
+
+class(females)
+
+anyB = grep("^B", ALL$BT)
+anyB
+ALL[,anyB]
+
+exp= exprs(ALL)
+exp[2:3,4:5]
+
+
+
+```
+
+
+
+```{r}
+# Pré-processamento dos dados
+
+#Transformação logarítmica
+#Filtros de "flat patterns"
+
+library(genefilter) #Filtra genes cujo desvio padrão dos valores de expressão é maior do que duas vezes a mediana dos desvios padrão de todos os genes
+
+exp = exprs(ALL)
+sds = rowSds(exp)
+m = median(sds)
+hist(sds, breaks = 50, col = "mistyrose")
+abline(v=m, col="blue",lwd = 4,lty = 2)
+abline(v=m*2, col="red",lwd = 4,lty = 2)
+ALLr = ALL[sds >= 3*median(sds), ]
+ALLr
+
+maximos = apply(exp,1,max) #Filtra genes cujo rácio do máximo valor sobre o mínimo valor de expressão seja superior a 2
+
+minimos = apply(exp,1,min)
+vl = maximos/minimos > 2
+ALLm2=ALL[vl,]
+ALLm2
+
+#Standardização – entre diferentes amostras
+
+exp_m2 = exprs(ALLm2) 
+
+exp_m2_sc = scale(exp_m2) 
+
+
+
+```
+
+3. sumarização dos dados (estatística descritiva, exploração com recurso a
+gráficos)
+
+
+```{r}
+# identificar variabilidade
+
+iqrs = sapply(cachexia.log, IQR)
+which.max(iqrs)
+hist(iqrs, breaks = 30, col = "blue")
+median(iqrs)
+which(iqrs>median(iqrs))
+cachexia.log.filt = cachexia.log[, which(iqrs>median(iqrs))]
+
+```
+
+
+
+
+4. análise estatística univariada; análise de expressão diferencial e de
+enriquecimento
+
+```{r}
+# Exemplo: criar grupos tumor vs normal a partir do barcode TCGA
+group_code <- substr(rownames(expr_log2), 14, 15)
+group <- ifelse(group_code == "11", "Normal", "Tumor")
+table(group)
+```
+
+
+```{r}
+## expressao diferencial
+
+s = which(as.character(ALL$mol.biol) %in% c("BCR/ABL", "NEG"))
+ALLs = ALLm2[, s]
+ALLs
+ALLs$mol.biol = factor(ALLs$mol.biol)
+table(ALLs$mol.biol)
+
+tt = rowttests(ALLs, "mol.biol")
+names(tt)
+tt$p.value
+rank = order(tt$p.value)
+p20 = rank[1:20]
+tt$p.value[p20]
+
+g =featureNames(ALLm2[p20])
+g
+annotation(ALL)
+
+library(hgu95av2.db)
+unlist(mget(g, hgu95av2SYMBOL))
+
+ALL20 = ALLs[p20,]
+order_cols = order(ALL20$mol.biol)
+order_cols
+ALL20 = ALL20[,order_cols]
+heatmap(exprs(ALL20), Colv = NA, labCol = ALL20$mol.biol)
+
+library(limma)
+design = model.matrix(~ALLm2$mol.biol)
+fit = lmFit(ALLm2,design)
+fit2 = eBayes(fit)
+diff = topTable(fit2, coef=2, 10)
+diff
+head(unlist(mget(rownames(diff), hgu95av2SYMBOL)))
+
+library(GOstats)
+ALLenr = ALL[, s]
+filt = nsFilter(ALLenr, require.entrez=T, remove.dupEntrez=T, var.func=IQR, var.cutoff=0.5, feature.exclude="^AFFX")
+ALLf = filt$eset
+
+affyUniverse = featureNames(ALLf)
+entrezUniverse = unlist(mget(affyUniverse, hgu95av2ENTREZID))
+length(entrezUniverse)
+
+ttests = rowttests(ALLf, "mol.biol")
+smPV = ttests$p.value < 0.01
+sum(smPV)
+pvalFiltered = ALLf[smPV, ]
+
+selectedEntrezIds = unlist(mget(featureNames(pvalFiltered), hgu95av2ENTREZID))
+
+
+params = new("GOHyperGParams", geneIds=selectedEntrezIds, 
+             universeGeneIds=entrezUniverse, annotation="hgu95av2.db", ontology="MF", 
+             pvalueCutoff= 0.025, testDirection="over")
+hgOver = hyperGTest(params)
+hgOver
+summary(hgOver)
+
+
+library(TCGAbiolinks) #esta não instalou
+library(SummarizedExperiment)
+library(DESeq2)
+library(tidyverse)
+library(pheatmap)
+
+```
+
