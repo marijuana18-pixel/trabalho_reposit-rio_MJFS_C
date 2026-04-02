@@ -1,6 +1,6 @@
 ---
-title: "Trabalho Prático 1 - Extração de Conhecimento de Dados Biológicos"
-author: "Carina Filipa Carvalho Ferreira e Maria Joana Ferreira da Silva"
+title: "trabalho extração"
+author: "Carina Ferreira e Maria Joana Ferreira da Silva"
 date: "`r Sys.Date()`"
 output: html_document
 ---
@@ -17,7 +17,6 @@ Escolha do dataset:
 
 TCGA-BRCA (cancro da mama)
 
-A seleção foi efetuada através da plataforma https://portal.gdc.cancer.gov/analysis_page?app=Projects.
 Inicialmente, foi escolhida a base de dados The Cancer Genome Atlas, devido à sua abrangência e qualidade, disponibilizando dados moleculares de diversos tipos de cancro humano. Foi selecionado o TCGA-BRCA, correspondente ao carcinoma invasivo da mama, que é um dos tipos de cancro mais estudados e com elevada relevância clínica.
 De seguida, procedeu-se à definição do tipo de dados a utilizar. Foi selecionada a categoria de dados Transcriptome Profiling, com o objetivo de obter informação ao nível da expressão genética. Dentro desta categoria, optou-se especificamente por dados do tipo Gene Expression Quantification, garantindo que os valores correspondem à quantificação da expressão de genes.
 
@@ -211,14 +210,6 @@ cachexia.log.filt = cachexia.log[, which(iqrs>median(iqrs))]
 
 4. análise estatística univariada; análise de expressão diferencial e de
 enriquecimento
-
-```{r}
-# Exemplo: criar grupos tumor vs normal a partir do barcode TCGA
-group_code <- substr(rownames(expr_log2), 14, 15)
-group <- ifelse(group_code == "11", "Normal", "Tumor")
-table(group)
-```
-
 
 ```{r}
 ## expressao diferencial
