@@ -1,0 +1,235 @@
+---
+title: "Extração"
+author: "Carina Ferreira"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+FASE 1 — Preparação e análise inicial
+
+1. Dados
+
+Os dados utilizados neste trabalho pertencem ao projeto TCGA-BRCA, que reúne perfis de expressão génica de amostras de cancro da mama obtidos por tecnologia RNA-seq. Este tipo de dados é amplamente utilizado na investigação biomédica, sendo fundamental para a compreensão dos mecanismos moleculares associados ao desenvolvimento do cancro.
+
+A análise de dados de expressão génica permite identificar variações nos níveis de expressão entre diferentes condições biológicas, contribuindo para a identificação de padrões relevantes e potenciais biomarcadores.
+
+2. Carregamento dos dados
+
+```{r}
+data <- read.csv("expression_matrix.csv", row.names = 1)
+dim(data)
+```
+
+3. Pré-processamento
+
+Numa fase inicial, procedeu-se à preparação dos dados, incluindo a remoção de genes com níveis de expressão reduzidos, de forma a minimizar o ruído e focar a análise em informação biologicamente relevante. Posteriormente, foi aplicada uma transformação logarítmica, com o objetivo de estabilizar a variância e melhorar a comparabilidade entre amostras.
+
+Este conjunto de procedimentos é essencial para garantir a qualidade dos dados e a fiabilidade das análises subsequentes.
+
+```{r}
+# remover genes com baixa expressão
+data <- data[rowSums(data) > 10, ]
+```
+
+```{r}
+#Filtros de "flat patterns"
+
+library(genefilter) 
+exp = as.matrix(data)
+sds = rowSds(exp)
+m = median(sds)
+hist(log10(sds+1), breaks = 50, col = "mistyrose")
+abline(v=log10(m+1), col="blue",lwd = 4,lty = 2)
+abline(v=log10(m*2+1), col="red",lwd = 4,lty = 2) 
+datar = exp[sds >= 3*m, ]
+datar
+```
+
+```{r}
+# Filtra genes cujo rácio do máximo valor sobre o mínimo valor de expressão seja superior a 2
+
+maximos = apply(exp,1,max) 
+minimos = apply(exp,1,min) 
+vl = maximos/minimos > 2
+data1=exp[vl,]
+data1
+```
+
+```{r}
+# transformação log
+data_log <- log2(data1 + 1)
+```
+
+4. Estatística descritiva
+
+Foram realizadas análises exploratórias para compreender a distribuição dos dados.
+
+```{r}
+summary(data_log)
+boxplot(data_log, las=2)
+```
+
+```{r}
+boxplot(data_log[,1:50],
+        las=2,
+        main="Distribuição da expressão (50 amostras)",
+        col="lightblue")
+```
+
+A análise descritiva permitiu caracterizar a distribuição dos valores de expressão génica nas diferentes amostras. Através da observação dos gráficos obtidos, verifica-se uma distribuição globalmente consistente entre as amostras, com algumas variações que poderão refletir diferenças biológicas ou técnicas.
+
+A identificação de possíveis outliers e a avaliação da dispersão dos dados constituem etapas importantes na validação da qualidade do conjunto de dados.
+
+5. Definição dos grupos
+
+As amostras foram classificadas em tumorais e normais com base na codificação presente nos identificadores TCGA.
+
+```{r}
+group <- ifelse(substr(colnames(data1), 14, 15) == "01",
+                "Tumor", "Normal")
+
+group <- factor(group)
+
+table(group)
+```
+
+As amostras foram classificadas em dois grupos — tumorais e normais — com base na codificação presente nos identificadores TCGA. Esta distinção permite comparar os perfis de expressão génica entre diferentes condições biológicas e constitui a base para análises posteriores.
+
+6. Análise de expressão diferencial
+
+A análise de expressão diferencial foi realizada com recurso ao pacote DESeq2, permitindo identificar genes com diferenças significativas entre os dois grupos.
+
+```{r}
+library(DESeq2)
+
+colData <- data.frame(condition = group)
+rownames(colData) <- colnames(data1)
+
+dds <- DESeqDataSetFromMatrix(
+  countData = data1,
+  colData = colData,
+  design = ~ condition
+)
+
+dds <- DESeq(dds)
+res <- results(dds)
+
+head(res)
+```
+```{r}
+res$pvalue
+rank=order(res$padj)
+p20 = rank[1:20]
+res$padj[p20]
+```
+
+A análise de expressão diferencial foi realizada com recurso ao pacote DESeq2, permitindo identificar genes com diferenças significativas de expressão entre amostras tumorais e normais, realizando o teste Wald. Os resultados obtidos incluem estimativas de variação na expressão génica e medidas de significância estatística.
+
+A identificação destes genes sugere a existência de mecanismos moleculares distintos entre as condições em estudo, podendo estes estar associados a processos biológicos relevantes no contexto do cancro da mama.
+
+7. Análise de componentes principais (PCA)
+
+```{r}
+pca <- prcomp(t(data_log), scale = TRUE)
+
+plot(pca$x[,1], pca$x[,2],
+     col="blue", pch=19,
+     xlab="PC1", ylab="PC2",
+     main="PCA das amostras")
+
+group <- ifelse(substr(colnames(data1), 14, 15) == "01", "Tumor", "Normal")
+
+plot(pca$x[,1], pca$x[,2],
+     col=ifelse(group=="Tumor","red","blue"),
+     pch=19,
+     xlab="PC1", ylab="PC2",
+     main="PCA das amostras")
+
+legend("topright", legend=c("Tumor","Normal"),
+       col=c("red","blue"), pch=19)
+```
+
+Após a análise descritiva dos dados, foram aplicadas técnicas de redução de dimensionalidade com o objetivo de explorar a estrutura global dos dados.
+
+A análise de componentes principais (PCA) evidencia uma separação parcial entre amostras tumorais e normais ao longo das componentes principais. Observa-se uma tendência de agrupamento das amostras de acordo com o seu perfil de expressão génica, embora se verifique alguma sobreposição, refletindo a heterogeneidade biológica dos dados.
+
+Estes resultados sugerem que a variabilidade capturada pelas componentes principais está associada a diferenças biológicas relevantes entre as amostras.
+
+8. Clustering hierárquico
+
+Foi realizado clustering hierárquico para agrupar amostras com perfis semelhantes.
+
+```{r}
+var_genes <- apply(data_log, 1, var)
+top_genes <- names(sort(var_genes, decreasing = TRUE))[1:50]
+
+dist_mat <- dist(t(data_log[top_genes, ]))
+
+hc <- hclust(dist_mat, method = "complete")
+
+plot(hc,
+     main = "Clustering Hierárquico (todas as amostras)",
+     labels = FALSE,
+     hang = -1)
+
+sample_subset <- sample(colnames(data_log), 30)
+
+dist_mat <- dist(t(data_log[top_genes, sample_subset]))
+hc <- hclust(dist_mat)
+
+plot(hc,
+     main="Clustering Hierárquico (30 amostras)",
+     labels=FALSE,
+     hang=-1)
+```
+
+O clustering hierárquico permitiu agrupar as amostras com base na similaridade dos seus perfis de expressão génica. A formação de clusters distintos indica a presença de estrutura nos dados, podendo refletir diferenças biológicas entre os grupos analisados.
+
+Devido ao elevado número de amostras, foi considerada uma subamostra representativa para facilitar a visualização dos agrupamentos. Os resultados obtidos são consistentes com os padrões observados na análise de componentes principais.
+
+Apesar da identificação de agrupamentos, a complexidade dos dados sugere a existência de heterogeneidade entre as amostras.
+
+9. Heatmap
+
+Para visualizar variações nos níveis de expressãoo, foi construído um heatmap com os genes mais variáveis.
+
+```{r}
+library(pheatmap)
+
+pheatmap(data_log[top_genes, ],
+         scale="row",
+         show_rownames=FALSE,
+         show_colnames=FALSE,
+         clustering_distance_cols="euclidean",
+         clustering_method="complete",
+         main="Heatmap dos genes mais variáveis")
+```
+
+Separando por grupos
+
+```{r}
+annotation_col <- data.frame(
+  Tipo = group
+)
+rownames(annotation_col) <- colnames(data_log)
+
+pheatmap(data_log[top_genes, ],
+         scale="row",
+         show_rownames=FALSE,
+         show_colnames=FALSE,
+         annotation_col=annotation_col,
+         main="Heatmap dos genes mais variáveis")
+```
+
+O heatmap dos genes mais variáveis evidencia variações nos níveis de expressão génica entre as amostras, permitindo observar regiões de maior e menor intensidade. A organização dos dados sugere a existência de grupos de amostras com perfis semelhantes.
+
+A consistência entre os padrões observados no heatmap e os resultados do clustering reforça a relevância dos genes selecionados e a existência de estrutura nos dados. Estes resultados corroboram as tendências observadas nas restantes análises exploratórias
+
+Concluindo:
+
+Em síntese, a análise dos dados de expressão génica revelou a existência de padrões estruturados e diferenças relevantes entre amostras tumorais e normais. A aplicação de métodos exploratórios e técnicas de análise não supervisionada permitiu caracterizar a variabilidade dos dados e identificar agrupamentos consistentes.
+
+A análise de expressão diferencial destacou genes potencialmente importantes do ponto de vista biológico, evidenciando a utilidade destas abordagens na análise de dados genómicos e na compreensão de processos moleculares complexos.
+
+
+
