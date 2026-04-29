@@ -1,0 +1,422 @@
+---
+title: "Extração"
+author: "Carina Ferreira e Maria Joana Ferreira da Silva"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+1.  Introdução
+
+A análise de dados de expressão génica permite identificar padrões biológicos relevantes e diferenças entre condições experimentais. No presente trabalho, foi analisado um conjunto de dados de RNA-seq proveniente do projeto TCGA, com o objetivo de comparar amostras tumorais e normais.
+
+Foram aplicadas várias metodologias, incluindo análise exploratória, análise de expressão diferencial e métodos de aprendizagem automática, seguindo as abordagens apresentadas nas aulas. Estas técnicas permitem caracterizar a variabilidade dos dados, identificar genes relevantes e avaliar a capacidade de classificação das amostras.
+
+2.  Carregamento dos dados
+
+2. Tarefas de preparação e de pré-processamento dos dados
+
+Usamos o gdc-rnaseq-tool em https://github.com/cpreid2/gdc-rnaseq-tool para fazer donwload dos ficheiros RNA-Seq/miRNA-Seq do portal GDC e tranformar em matrices idenitficatas por TCGA barcode usando o GDC manifest file
+
+Esta ferramenta gdc-rnaseq-tool faz o seguinte: 
+
+Downloads RNA-Seq / miRNA-Seq data files using a GDC manifest file
+Unzips the files into separate folders identified by experimental strategy and bioinformatics workflow
+Merges the files into separate matrix files identified in the table below
+
+Fizemos download to scrip gdc-rnaseq-tool.py do link https://github.com/cpreid2/gdc-rnaseq-tool/releases/download/1.0/gdc-rnaseq-tool.py
+
+Fizemos download do ficheiro manifesto do portal contendo os ficheiros RNA/miRNA expression files (de https://portal.gdc.cancer.gov/
+
+Guardamos ambos os ficheiros e corremos o seguinte comando:
+
+    python3 gdc-rnaseq-tool.py <manifest_file> --hugo
+    
+Esta ferramenta permite obter um output "raw_count_matrix.tsv" que necessita de ser convertido para csv.
+
+Para isso pode-se usar o código em python:
+
+import pandas as pd
+
+df = pd.read_csv("results/raw_count_matrix.tsv", sep="\t")
+df.to_csv("expression_matrix.csv", index=False)
+
+```{r}
+#para ler o ficheiro dos dados em csv
+data <- read.csv("expression_matrix.csv", row.names = 1)
+#data <- expression_matrix
+data
+class(data)
+dim(data)
+```
+O conjunto de dados apresenta 1881 genes e 1207 amostras.
+
+3.  Preparação e pré-processamento dos dados
+
+Numa fase inicial, procedeu-se à preparação dos dados, incluindo a remoção de genes com níveis de expressão reduzidos, de forma a minimizar o ruído e focar a análise em informação biologicamente relevante. Posteriormente, foi aplicada uma transformação logarítmica, com o objetivo de estabilizar a variância e melhorar a comparabilidade entre amostras.
+
+Este conjunto de procedimentos é essencial para garantir a qualidade dos dados e a fiabilidade das análises subsequentes.
+
+```{r}
+# Filtros de "flat patterns"
+
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("genefilter")
+BiocManager::install("DESeq2")
+
+#install dependencies RSQLite 
+
+library(genefilter)
+
+
+exp <- as.matrix(data)
+
+# filtro por variabilidade
+sds <- rowSds(exp)
+m <- median(sds)
+
+# filtro max/min
+maximos <- apply(exp,1,max)
+minimos <- apply(exp,1,min)
+vl <- maximos/minimos > 2
+
+# aplicar ambos os filtros
+data_filtrada <- exp[(sds >= 3*m) & vl, ]
+
+# transformação log
+data_log <- log2(data_filtrada + 1)
+
+dim(data_filtrada)
+```
+
+Após a aplicação dos filtros, foi obtido um subconjunto de genes com maior variabilidade e relevância biológica, reduzindo o ruído presente nos dados originais.
+Foram aplicados filtros para remover genes com padrões de expressão pouco informativos (“flat patterns”), conforme apresentado nas aulas. Em particular, foram considerados dois critérios: um baseado na variabilidade (desvio padrão) e outro baseado no rácio entre os valores máximo e mínimo de expressão. Apenas foram mantidos os genes que satisfazem ambos os critérios. Posteriormente, foi aplicada uma transformação logarítmica (log2), de forma a estabilizar a variância e melhorar a distribuição dos dados.
+Após a filtragem, o número de genes foi reduzido, mantendo-se apenas aqueles com maior capacidade informativa.
+
+4.  Estatística descritiva
+
+Foram realizadas análises exploratórias para compreender a distribuição dos dados.
+
+```{r}
+summary(data_log)
+boxplot(data_log, las = 2, main = "Distribuição dos dados")
+```
+
+```{r}
+boxplot(data_log[,1:50],
+        las=2,
+        main="Distribuição da expressão (50 amostras)",
+        col="lightblue")
+```
+
+O boxplot das 50 amostras permitiu analisar a distribuição dos valores de expressão génica após transformação logarítmica. Observa-se que as medianas das diferentes amostras apresentam valores relativamente próximos, indicando uma boa comparabilidade entre amostras.
+
+Apesar da presença de alguns valores extremos (outliers), a maioria das distribuições apresenta uma dispersão semelhante, sugerindo que a transformação log2 contribuiu para estabilizar a variância dos dados.
+
+Estes resultados indicam que os dados estão adequadamente preparados para análises subsequentes, como clustering e expressão diferencial. De forma geral, não se observam diferenças extremas entre amostras, o que indica ausência de efeitos técnicos relevantes.
+
+5.  Definição dos grupos
+
+As amostras foram classificadas em tumorais e normais com base na codificação presente nos identificadores TCGA.
+
+```{r}
+group <- ifelse(substr(colnames(data_filtrada), 14, 15) == "01",
+                "Tumor", "Normal")
+
+group <- factor(group)
+
+table(group)
+```
+
+As amostras foram classificadas em dois grupos com base na codificação presente nos identificadores TCGA. Esta distinção permite comparar os perfis de expressão génica entre diferentes condições biológicas e constitui a base para análises posteriores.
+
+As amostras com código “01” foram classificadas como tumorais, enquanto as restantes foram consideradas normais. Posteriormente, os grupos foram convertidos para fator, de forma a serem utilizados nos modelos estatísticos.
+
+A distribuição das amostras por grupo foi verificada através da função table(), garantindo a consistência da classificação.
+
+6.  Análise de expressão diferencial
+
+A análise de expressão diferencial foi realizada com recurso ao pacote DESeq2, permitindo identificar genes com diferenças significativas entre os dois grupos.
+
+```{r}
+library(DESeq2)
+
+# criar metadata
+colData <- data.frame(condition = group)
+rownames(colData) <- colnames(data_filtrada)
+
+# criar objeto DESeq2
+dds <- DESeqDataSetFromMatrix(
+  countData = data_filtrada,
+  colData = colData,
+  design = ~ condition
+)
+
+# correr análise
+dds <- DESeq(dds)
+
+# obter resultados
+res <- results(dds)
+
+# ordenar por significância
+res_ord <- res[order(res$padj), ]
+
+head(res_ord)
+```
+
+A análise de expressão diferencial foi realizada com recurso ao pacote DESeq2, permitindo identificar genes com diferenças significativas de expressão entre amostras tumorais e normais, com base no teste de Wald. Os resultados obtidos incluem estimativas de variação na expressão génica (log2FoldChange) e medidas de significância estatística ajustadas.
+
+A identificação destes genes sugere a existência de mecanismos moleculares distintos entre as condições em estudo, podendo estar associados a processos biológicos relevantes no contexto do cancro da mama.
+
+```{r}
+res$pvalue
+
+# ordenar por padj (remover NA)
+rank <- order(res$padj, na.last = NA)
+
+# top 20 genes
+p20 <- rank[1:20]
+
+# ver padj dos top 20
+res$padj[p20]
+
+# ver tabela completa dos top 20
+res[p20, ]
+
+# número de genes significativos
+sum(res$padj < 0.05, na.rm = TRUE)
+```
+
+Após a obtenção dos resultados da análise de expressão diferencial, os genes foram ordenados com base no valor ajustado de significância (padj). Foram selecionados os 20 genes com menor valor de padj, correspondendo aos genes mais significativamente diferencialmente expressos entre as condições analisadas.
+
+Adicionalmente, foi determinado o número total de genes com padj inferior a 0.05, permitindo identificar os genes estatisticamente significativos.
+
+Foram identificados 479 genes com expressão diferencial estatisticamente significativa (padj \< 0.05), evidenciando alterações relevantes entre as amostras tumorais e normais.
+
+Valores positivos de log2FoldChange indicam maior expressão em amostras tumorais, enquanto valores negativos indicam maior expressão em amostras normais.
+
+7.  Análise de componentes principais (PCA)
+
+```{r}
+pca <- prcomp(t(data_log), scale = TRUE)
+
+plot(pca$x[,1], pca$x[,2],
+     col="blue", pch=19,
+     xlab="PC1", ylab="PC2",
+     main="PCA das amostras")
+
+plot(pca$x[,1], pca$x[,2],
+     col = ifelse(group == "Tumor", "red", "blue"),
+     pch = 19,
+     xlab = "PC1",
+     ylab = "PC2",
+     main = "PCA das amostras")
+
+legend("topright",
+       legend = c("Tumor", "Normal"),
+       col = c("red", "blue"),
+       pch = 19)
+
+summary(pca)
+```
+
+Após a análise descritiva dos dados, foram aplicadas técnicas de redução de dimensionalidade com o objetivo de explorar a estrutura global dos dados.
+
+A análise de componentes principais (PCA) evidencia uma separação parcial entre amostras tumorais e normais ao longo das componentes principais. Observa-se uma tendência de agrupamento das amostras de acordo com o seu perfil de expressão génica, embora se verifique alguma sobreposição, refletindo a heterogeneidade biológica inerente aos dados.
+
+Estes resultados sugerem que a variabilidade capturada pelas componentes principais está associada a diferenças biológicas relevantes entre as condições em estudo.
+
+8.  Clustering hierárquico
+
+Foi realizado clustering hierárquico para agrupar amostras com perfis semelhantes.
+
+```{r}
+var_genes <- apply(data_log, 1, var)
+top_genes <- names(sort(var_genes, decreasing = TRUE))[1:50]
+
+dist_mat <- dist(t(data_log[top_genes, ]))
+
+hc <- hclust(dist_mat, method = "complete")
+
+plot(hc,
+     main = "Clustering Hierárquico (todas as amostras)",
+     labels = FALSE,
+     hang = -1)
+
+sample_subset <- sample(colnames(data_log), 30)
+
+dist_mat <- dist(t(data_log[top_genes, sample_subset]))
+hc <- hclust(dist_mat, method = "complete")
+
+plot(hc,
+     main="Clustering Hierárquico (30 amostras)",
+     labels=FALSE,
+     hang=-1)
+```
+
+Foram selecionados os 50 genes com maior variabilidade, de forma a focar a análise nos genes mais informativos. O dendrograma obtido permite visualizar a similaridade entre as amostras, evidenciando a formação de clusters.
+
+Devido ao elevado número de amostras, foi considerada uma subamostra representativa para facilitar a visualização dos agrupamentos.
+
+Os resultados obtidos são consistentes com os padrões observados na análise de componentes principais, sugerindo a existência de estrutura nos dados e diferenças biológicas entre os grupos analisados.
+
+Observa-se a tendência para a formação de grupos de amostras com perfis de expressão semelhantes, podendo alguns desses agrupamentos corresponder às condições tumorais e normais. No entanto, tal como observado na análise de PCA, existe alguma sobreposição entre os grupos, refletindo a heterogeneidade biológica dos dados.
+
+9.  Heatmap
+
+Para visualizar variações nos níveis de expressãoo, foi construído um heatmap com os genes mais variáveis.
+
+```{r}
+library(pheatmap)
+
+pheatmap(data_log[top_genes, ],
+         scale="row",
+         show_rownames=FALSE,
+         show_colnames=FALSE,
+         clustering_distance_cols="euclidean",
+         clustering_method="complete",
+         main="Heatmap dos genes mais variáveis")
+```
+
+Separando por grupos
+
+```{r}
+
+# annotation das amostras
+annotation_col <- data.frame(Grupo = group)
+rownames(annotation_col) <- colnames(data_log)
+
+# heatmap
+pheatmap(data_log[top_genes, ],
+         annotation_col = annotation_col,
+         show_rownames = FALSE,
+         show_colnames = FALSE,
+         main = "Heatmap dos genes mais variáveis")
+```
+
+O heatmap dos genes mais variáveis evidencia variações nos níveis de expressão génica entre as amostras, permitindo identificar regiões de maior e menor intensidade de expressão. A organização dos dados sugere a existência de grupos de amostras com perfis semelhantes.
+
+A anotação das amostras evidencia uma tendência de separação entre amostras tumorais e normais, com padrões distintos de expressão génica. Estes resultados reforçam a evidência de diferenças biológicas entre os grupos analisados, confirmando os resultados obtidos nas análises anteriores (PCA e clustering hierárquico).
+
+10. Análise Preditiva
+
+Após a identificação de genes diferencialmente expressos, foi realizada uma análise preditiva com o objetivo de avaliar a capacidade destes genes para discriminar entre amostras tumorais e normais.
+
+Para tal, foram utilizados os genes mais significativos previamente identificados, sendo os dados organizados de forma adequada para aplicação de métodos de classificação.
+
+Os dados foram divididos em conjuntos de treino e teste, permitindo avaliar o desempenho dos modelos de forma independente.
+
+```{r}
+# preparação dos dados
+dados <- t(data_log[p20, ])
+dados <- as.data.frame(dados)
+dados$grupo <- group
+
+# divisão treino/teste (igual ao professor)
+set.seed(12345)
+ind = sample(2, nrow(dados), replace=TRUE, prob=c(0.7, 0.3))
+
+trainData = dados[ind==1, ]
+testData  = dados[ind==2, ]
+```
+
+Foi realizada uma análise de classificação com o objetivo de distinguir amostras tumorais de amostras normais, utilizando os genes previamente selecionados.
+
+Os dados foram divididos em conjuntos de treino e teste, de forma aleatória, seguindo a proporção de 70% para treino e 30% para teste.
+
+Foram aplicados diferentes métodos de classificação, nomeadamente k-nearest neighbors (kNN), árvores de decisão e Support Vector Machines (SVM).
+
+O desempenho dos modelos foi avaliado com base na proporção de classificações corretas, permitindo comparar a capacidade preditiva de cada abordagem.
+
+```{r}
+# KNN
+library(class)
+
+knn_pred = knn(trainData[,-ncol(trainData)],
+               testData[,-ncol(testData)],
+               trainData$grupo)
+
+t = table(knn_pred, testData$grupo)
+t
+
+mean(knn_pred == testData$grupo)
+```
+TN (true negatives) = 29
+TP (true positives) = 34
+FP (false positives) = 2
+FN (false negatives) = 6
+Total = 71 amostras
+
+O classificador k-NN alcançou uma exatidão (accuracy) global de 88,7% (34+29/71 amostras  = 88.7%), com elevada especificidade (29/31 = 93,5%) e precisão (34/36 = 94,4%) na deteção de tumores. No entanto, a sensibilidade (Recall) foi ligeiramente inferior (34/40 = 85%), tendo seis amostras tumorais sido incorretamente classificadas como normais, o que evidencia uma taxa de falsos negativos não negligenciável e potencialmente crítica em aplicações clínicas.
+
+```{r}
+# árvore de decisão (igual estilo)
+library(rpart)
+
+modelo = rpart(grupo ~ ., data = trainData)
+
+pred_tree = predict(modelo, testData, type="class")
+
+table(pred_tree, testData$grupo)
+
+mean(pred_tree == testData$grupo)
+```
+
+
+
+TN (verdadeiros negativos) = 24
+TP (verdadeiros positivos) = 346
+FP (falsos positivos) = 7
+FN (falsos negativos) = 8
+Total = 385 amostras
+
+
+
+O classificador baseado em árvore de decisão apresentou uma elevada exatidão global (96,1%), com excelente sensibilidade (Recall) (346/346+8) = 97,7%) e precisão (346/346+7) = 98,0%) na deteção de tumores. No entanto, a especificidade foi mais baixa (24/24+7) = 77,4%), refletindo um número relativamente elevado de falsos positivos. Estes resultados sugerem um modelo orientado para maximizar a deteção de tumores, à custa de uma maior taxa de sobrediagnóstico em indivíduos normais.
+
+
+
+
+
+```{r}
+# SVM (como no final do script dele)
+library(e1071)
+
+modelsvm = svm(grupo ~ ., trainData)
+
+svm_pred = predict(modelsvm, testData)
+
+table(svm_pred, testData$grupo)
+
+mean(svm_pred == testData$grupo)
+```
+
+TN = 29
+TP = 352
+FP = 2
+FN = 2
+Total = 385
+
+O classificador SVM apresentou desempenho excecional, com uma exatidão global de aproximadamente 98,9%, sensibilidade (352/352+2 = 99.4%) e precisão de 99,4% (352/352+2=99.4%) e elevada especificidade (29/29+2=93,5%). O número de erros foi mínimo e equilibrado (dois falsos positivos e dois falsos negativos), evidenciando uma excelente capacidade de discriminação entre amostras normais e tumorais.
+
+
+Comparação dos modelos
+Os modelos de classificação apresentaram elevados valores de exatidão global (accuracy), destacando-se o modelo SVM com aproximadamente 98,9%, seguido do KNN (97.9%) e da árvore de decisão (96.1%).
+
+A comparação entre os classificadores revelou diferenças marcadas no desempenho. O k-NN apresentou a menor exatidão (88,7%) e sensibilidade (85%), evidenciando limitações na deteção de tumores. A árvore de decisão alcançou elevada exatidão (96,1%) e sensibilidade (97,7%), mas com uma especificidade mais baixa (77,4%), refletindo uma tendência para sobrediagnóstico. Em contraste, o SVM apresentou o melhor desempenho global, com exatidão de aproximadamente 99,0%, elevada sensibilidade e precisão (99,4%) e boa especificidade (93,5%), além de um número mínimo e equilibrado de erros. Estes resultados indicam que o SVM oferece o melhor compromisso entre deteção de tumores e identificação de indivíduos normais, sendo o modelo mais robusto para este conjunto de dados.
+
+
+11. Conclusão
+
+Os nossos resultados indicam uma forte capacidade dos dados de expressão génica para discriminar entre amostras tumorais e normais, sugerindo a presença de padrões biológicos bem definidos.
+
+No entanto, dada a elevada dimensionalidade dos dados e o número limitado de amostras, não se pode excluir a possibilidade de overfitting, sendo recomendada validação adicional com conjuntos de dados independentes.
+
+Ainda assim, os resultados obtidos demonstram o potencial destes genes como biomarcadores para distinção entre condições tumorais e normais.
+
+Os nossos resultados indicam que o SVM oferece o melhor compromisso entre deteção de tumores e identificação de indivíduos normais, sendo o modelo mais robusto para este conjunto de dados.
+
+
